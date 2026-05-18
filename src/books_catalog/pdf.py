@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import mimetypes
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -20,16 +22,45 @@ def price_as_number(price: str) -> int:
     return int(digits) if digits else 0
 
 
+def is_safe_image_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host or host in {"localhost", "127.0.0.1", "::1"}:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    except ValueError:
+        pass
+    return True
+
+
 def image_to_data_uri(url: str, timeout: int = 15) -> str:
     if not url:
         return ""
+    if not is_safe_image_url(url):
+        return ""
     try:
-        response = requests.get(url, headers=REQUEST_HEADERS, timeout=timeout)
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=timeout, stream=True)
         response.raise_for_status()
+        max_bytes = 8 * 1024 * 1024
+        content = b""
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            content += chunk
+            if len(content) > max_bytes:
+                return url
         content_type = response.headers.get("content-type", "").split(";")[0].strip()
         if not content_type or not content_type.startswith("image/"):
             content_type = mimetypes.guess_type(url)[0] or "image/jpeg"
-        encoded = base64.b64encode(response.content).decode("ascii")
+        encoded = base64.b64encode(content).decode("ascii")
         return f"data:{content_type};base64,{encoded}"
     except Exception:
         return url
