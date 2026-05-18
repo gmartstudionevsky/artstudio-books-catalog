@@ -39,6 +39,7 @@ OZON_ANTIBOT_MARKERS = [
 ]
 WHITESPACE_RE = re.compile(r"\s+")
 PRICE_NUM_RE = re.compile(r"(\d[\d\s\u00A0\u2009\u202F]{0,15})(?:\s*(?:₽|руб\.?|р\.))", re.IGNORECASE)
+OZON_SHORT_PATH_RE = re.compile(r"^/t/[A-Za-z0-9]+/?$")
 
 
 def is_safe_url(url: str) -> bool:
@@ -93,6 +94,19 @@ def normalize_ozon_url(url: str) -> str:
     return urlunparse((p.scheme or "https", p.netloc, p.path, "", "", ""))
 
 
+def resolve_ozon_url(url: str) -> str:
+    p = urlparse(url)
+    if not is_ozon_url(url):
+        return url
+    if OZON_SHORT_PATH_RE.match(p.path or ""):
+        try:
+            final_url = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True).url
+            return normalize_ozon_url(final_url)
+        except Exception:
+            return normalize_ozon_url(url)
+    return normalize_ozon_url(url)
+
+
 def cleanup_ozon_title(text: str) -> str:
     t = clean_text(text)
     t = re.sub(r"\s*купить\s+на\s+ozon.*$", "", t, flags=re.IGNORECASE)
@@ -117,6 +131,31 @@ def filter_image(url: str) -> bool:
     low = url.lower()
     bad = ["logo", "icon", "avatar", "sprite", "pixel", "payment", "delivery"]
     return not any(x in low for x in bad)
+
+
+def deep_find_first(data: Any, keys: set[str]) -> Any:
+    def has_value(v: Any) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, str):
+            return v.strip() != ""
+        if isinstance(v, (list, dict, tuple, set)):
+            return len(v) > 0
+        return True
+
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if str(k).lower() in keys:
+                return v
+            nested = deep_find_first(v, keys)
+            if has_value(nested):
+                return nested
+    if isinstance(data, list):
+        for item in data:
+            nested = deep_find_first(item, keys)
+            if has_value(nested):
+                return nested
+    return None
 
 
 def fetch_static(url: str, timeout: int = 25) -> str:
@@ -171,7 +210,7 @@ def parse_ozon_product(
     debug_dir: str | None = None,
 ) -> ParsedBook:
     source_url = url
-    canonical_url = normalize_ozon_url(url)
+    canonical_url = resolve_ozon_url(url)
     result = ParsedBook(url=canonical_url, source="Ozon")
     raw: dict[str, Any] = {"source_url": source_url, "canonical_url": canonical_url, "product_id": extract_product_id_from_ozon_url(url)}
     html = ""
@@ -184,12 +223,59 @@ def parse_ozon_product(
     og_desc = clean_text((soup.find("meta", property="og:description") or {}).get("content", ""), 700)
     og_img = clean_text((soup.find("meta", property="og:image") or {}).get("content", ""))
     price_meta = clean_text((soup.find("meta", property="product:price:amount") or {}).get("content", ""))
+    breadcrumbs_meta = clean_text((soup.find("meta", property="og:site_name") or {}).get("content", ""))
 
     result.title = cleanup_ozon_title(og_title)
     result.description = og_desc
     result.price = normalize_price(price_meta)
     if og_img and filter_image(og_img):
         result.images.append(og_img)
+    if breadcrumbs_meta:
+        result.raw["category_hint"] = breadcrumbs_meta
+
+    next_data = {}
+    next_script = soup.find("script", id="__NEXT_DATA__", type="application/json")
+    if next_script and next_script.string:
+        try:
+            next_data = json.loads(next_script.string)
+        except Exception:
+            next_data = {}
+    if next_data:
+        result.raw["next_data_present"] = True
+        props_data = next_data.get("props", {})
+        candidate_price = deep_find_first(props_data, {"finalprice", "price", "currentprice"})
+        candidate_old = deep_find_first(props_data, {"oldprice", "originalprice"})
+        candidate_brand = deep_find_first(props_data, {"brand", "brandname"})
+        candidate_seller = deep_find_first(props_data, {"sellername", "seller"})
+        candidate_rating = deep_find_first(props_data, {"rating", "averagerating"})
+        candidate_reviews = deep_find_first(props_data, {"reviewscount", "reviews"})
+        candidate_stock = deep_find_first(props_data, {"stock", "availability", "isavailable"})
+        candidate_breadcrumbs = deep_find_first(props_data, {"breadcrumbs", "categorypath"})
+        candidate_sku = deep_find_first(props_data, {"sku", "productid"})
+        candidate_images = deep_find_first(props_data, {"images", "gallery"})
+        if not result.price and candidate_price:
+            result.price = normalize_price(candidate_price)
+        if candidate_old:
+            result.raw["old_price"] = normalize_price(candidate_old) or clean_text(candidate_old)
+        if candidate_brand:
+            result.raw["brand"] = clean_text(candidate_brand)
+        if candidate_seller:
+            result.raw["seller"] = clean_text(candidate_seller)
+        if candidate_rating:
+            result.raw["rating"] = clean_text(candidate_rating)
+        if candidate_reviews:
+            result.raw["reviews_count"] = clean_text(candidate_reviews)
+        if candidate_stock:
+            result.availability = clean_text(candidate_stock)
+            result.raw["availability_detail"] = clean_text(candidate_stock)
+        if candidate_sku:
+            result.raw["ozon_sku"] = clean_text(candidate_sku)
+        if candidate_breadcrumbs:
+            result.raw["breadcrumbs"] = clean_text(candidate_breadcrumbs)
+        if isinstance(candidate_images, list):
+            for img in candidate_images:
+                if isinstance(img, str) and img.startswith("http") and filter_image(img) and img not in result.images:
+                    result.images.append(img)
 
     page_data = {}
     needs_browser_fetch = not (result.title and result.price and result.description and result.images)
@@ -226,7 +312,7 @@ def parse_ozon_product(
         if page_data.get("html"):
             (d / "ozon_rendered.html").write_text(page_data["html"], encoding="utf-8")
         (d / "ozon_debug.json").write_text(json.dumps(page_data or raw, ensure_ascii=False, indent=2), encoding="utf-8")
-    result.images = [i for i in result.images if i.startswith("http")][:2]
+    result.images = [i for i in result.images if i.startswith("http")]
     missing = [k for k, v in {"title": result.title, "price": result.price, "description": result.description, "images": result.images}.items() if not v]
     if result.status != "Ozon anti-bot":
         if missing:
