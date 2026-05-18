@@ -65,6 +65,7 @@ jobs:
           MAX_ROWS: ${{ inputs.max_rows || '0' }}
           INCLUDE_ONLY_CHECKED: ${{ inputs.include_only_checked || 'false' }}
           ENABLE_PLAYWRIGHT_FALLBACK: ${{ inputs.enable_playwright_fallback || 'true' }}
+          OZON_BROWSER_MODE: always
         run: |
           python -m books_catalog.main
 
