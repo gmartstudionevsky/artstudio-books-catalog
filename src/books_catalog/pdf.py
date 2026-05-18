@@ -13,6 +13,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from playwright.sync_api import sync_playwright
 
+from .classifier import infer_topic
 from .models import BookRow
 from .parser import HEADERS as REQUEST_HEADERS
 
@@ -66,6 +67,35 @@ def image_to_data_uri(url: str, timeout: int = 15) -> str:
         return url
 
 
+
+def normalize_topic(topic: str, title: str) -> str:
+    base = (topic or "").strip()
+    if base and base.lower() not in {"", "без тематики", "coffee table / общее"}:
+        return base
+    inferred = infer_topic(title or "", "")
+    return inferred or "Без тематики"
+
+
+def topic_sort_key(topic: str) -> tuple[int, str]:
+    normalized = (topic or "").strip()
+    priority = [
+        "Петербург",
+        "Архитектура и город",
+        "Искусство",
+        "Театр и сцена",
+        "Дизайн и lifestyle",
+        "История и наследие",
+        "Фотоальбом",
+        "Coffee table / общее",
+        "Без тематики",
+    ]
+    first = normalized.split("/")[0].strip() if "/" in normalized else normalized
+    try:
+        rank = priority.index(first)
+    except ValueError:
+        rank = len(priority)
+    return (rank, normalized.lower())
+
 def prepare_pdf_books(rows: list[BookRow], include_only_checked: bool = False) -> list[dict[str, Any]]:
     books: list[dict[str, Any]] = []
     for row in rows:
@@ -82,22 +112,16 @@ def prepare_pdf_books(rows: list[BookRow], include_only_checked: bool = False) -
                 "url": row.url,
                 "source": row.data.get("Источник", ""),
                 "title": row.data.get("Название", "Без названия"),
-                "author": row.data.get("Автор", ""),
                 "price": row.data.get("Цена", ""),
                 "price_num": price_as_number(row.data.get("Цена", "")),
-                "availability": row.data.get("Наличие", ""),
-                "description": row.data.get("Краткое описание", ""),
-                "topic": row.data.get("Тематика", "Без тематики"),
-                "place": row.data.get("Подходит для", ""),
-                "visual_value": row.data.get("Визуальная ценность", ""),
-                "artstudio_fit": row.data.get("Контекст ARTSTUDIO", ""),
-                "priority": row.data.get("Приоритет закупки", ""),
+                "topic": normalize_topic(row.data.get("Тематика", ""), row.data.get("Название", "")),
+                "include_in_pdf": row.data.get("Включить в PDF", ""),
+                "include_in_pdf_bool": str(row.data.get("Включить в PDF", "")).strip().lower() in {"true", "1", "yes", "y", "да"},
                 "image1": image1,
                 "image2": image2,
-                "comment": row.data.get("Комментарий", ""),
             }
         )
-    books.sort(key=lambda item: (item["topic"], item.get("priority") != "высокий", item["title"]))
+    books.sort(key=lambda item: (topic_sort_key(item["topic"]), item["title"].lower()))
     return books
 
 
@@ -105,7 +129,7 @@ def group_by_topic(books: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for book in books:
         grouped[book["topic"] or "Без тематики"].append(book)
-    return dict(grouped)
+    return dict(sorted(grouped.items(), key=lambda kv: topic_sort_key(kv[0])))
 
 
 def render_html(rows: list[BookRow], output_dir: Path, include_only_checked: bool = False) -> Path:
@@ -122,7 +146,7 @@ def render_html(rows: list[BookRow], output_dir: Path, include_only_checked: boo
         grouped=grouped,
         total_count=len(books),
         total_budget=f"{total_budget:,}".replace(",", " ") + " ₽" if total_budget else "не определен",
-        high_priority_count=sum(1 for book in books if book.get("priority") == "высокий"),
+        high_priority_count=sum(1 for book in books if book.get("include_in_pdf_bool")),
         topic_count=len(grouped),
     )
     html_path = output_dir / "books_catalog.html"

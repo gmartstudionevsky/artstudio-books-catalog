@@ -1,0 +1,59 @@
+name: Generate PDF from Google Sheet
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_only_checked:
+        description: "PDF только по строкам с Включить в PDF = TRUE"
+        required: false
+        default: "true"
+        type: choice
+        options: ["false", "true"]
+  schedule:
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  generate-pdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+          python -m playwright install --with-deps chromium
+
+      - name: Generate PDF from sheet data
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_NAME: ${{ vars.SHEET_NAME || 'Лист1' }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          INCLUDE_ONLY_CHECKED: ${{ inputs.include_only_checked || 'true' }}
+        run: |
+          python -m books_catalog.pdf_only
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artstudio-books-pdf-only
+          path: |
+            output/books_catalog.pdf
+            output/books_catalog.html
+            output/run_summary.json
+          if-no-files-found: error
