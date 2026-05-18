@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 from dataclasses import asdict
 from html import unescape
@@ -24,6 +25,28 @@ HEADERS = {
 
 PRICE_RE = re.compile(r"(?:(?:Цена|price|стоимость)[^0-9]{0,20})?([0-9][0-9\s]{1,8})(?:\s?₽|\s?руб|\s?р\.)", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
+
+
+def is_safe_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    except ValueError:
+        # not an IP literal
+        pass
+    return True
 
 
 def clean_text(value: Any, max_len: int | None = None) -> str:
@@ -220,12 +243,16 @@ def parse_from_soup(url: str, soup: BeautifulSoup) -> ParsedBook:
 
 
 def fetch_static(url: str, timeout: int = 25) -> str:
+    if not is_safe_url(url):
+        raise ValueError("Unsafe URL: only public http(s) addresses are allowed")
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
     return response.text
 
 
 def fetch_rendered(url: str, timeout_ms: int = 35000) -> str:
+    if not is_safe_url(url):
+        raise ValueError("Unsafe URL: only public http(s) addresses are allowed")
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
