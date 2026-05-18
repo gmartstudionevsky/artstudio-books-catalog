@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -13,14 +14,20 @@ from .settings import get_settings
 from .sheets import SheetsClient, normalize_values, serialize_rows
 
 
+def build_cli() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--single-url")
+    p.add_argument("--debug", action="store_true")
+    p.add_argument("--output-json")
+    return p
+
+
 def should_parse(row: BookRow, force_refresh: bool) -> bool:
     if not row.url:
         return False
     if force_refresh:
         return True
-    if row.title and row.status in {"OK", "SKIPPED"}:
-        return False
-    return True
+    return not (row.title and row.status in {"OK", "SKIPPED"})
 
 
 def enrich_row(row: BookRow, force_refresh: bool, enable_playwright_fallback: bool, delay_seconds: float) -> dict[str, Any]:
@@ -28,22 +35,15 @@ def enrich_row(row: BookRow, force_refresh: bool, enable_playwright_fallback: bo
         row.set_value("Статус парсинга", row.status or "SKIPPED")
         return {"row": row.row_number, "url": row.url, "status": "SKIPPED"}
 
-    parsed = parse_book(
-        row.url,
-        enable_playwright_fallback=enable_playwright_fallback,
-        delay_seconds=delay_seconds,
-    )
+    parsed = parse_book(row.url, enable_playwright_fallback=enable_playwright_fallback, delay_seconds=delay_seconds)
     row.setdefault_nonempty("Источник", parsed.source, force=force_refresh)
     row.setdefault_nonempty("Название", parsed.title, force=force_refresh)
-    row.setdefault_nonempty("Автор", parsed.author, force=force_refresh)
     row.setdefault_nonempty("Цена", parsed.price, force=force_refresh)
-    row.setdefault_nonempty("Наличие", parsed.availability, force=force_refresh)
     row.setdefault_nonempty("Краткое описание", summarize_description(parsed.description), force=force_refresh)
     if parsed.images:
         row.setdefault_nonempty("Картинка 1", parsed.images[0], force=force_refresh)
     if len(parsed.images) > 1:
         row.setdefault_nonempty("Картинка 2", parsed.images[1], force=force_refresh)
-
     topic = infer_topic(row.data.get("Название", ""), row.data.get("Краткое описание", ""))
     row.setdefault_nonempty("Тематика", topic, force=force_refresh)
     place = infer_place(row.data.get("Тематика", topic), row.data.get("Название", ""), row.data.get("Краткое описание", ""))
@@ -52,49 +52,46 @@ def enrich_row(row: BookRow, force_refresh: bool, enable_playwright_fallback: bo
     row.setdefault_nonempty("Визуальная ценность", visual, force=force_refresh)
     row.setdefault_nonempty("Контекст ARTSTUDIO", context, force=force_refresh)
     row.setdefault_nonempty("Приоритет закупки", priority, force=force_refresh)
-    row.setdefault_nonempty("Включить в PDF", "TRUE", force=False)
     row.set_value("Статус парсинга", parsed.status)
     if parsed.error:
-        existing_comment = row.data.get("Комментарий", "")
-        if parsed.error not in existing_comment:
-            row.set_value("Комментарий", f"{existing_comment} | {parsed.error}".strip(" |"))
+        row.set_value("Комментарий", parsed.error)
     row.mark_updated()
     return {"row": row.row_number, "status": parsed.status, "parsed": parsed_to_debug_dict(parsed)}
 
 
+def run_single_url(url: str, output_json: str | None, debug: bool) -> None:
+    debug_dir = "output/debug" if debug else None
+    parsed = parse_book(url, enable_playwright_fallback=True, debug_dir=debug_dir)
+    data = parsed_to_debug_dict(parsed)
+    data["source_url"] = url
+    if output_json:
+        p = Path(output_json)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
+    cli_args, _ = build_cli().parse_known_args()
+    if cli_args.single_url:
+        run_single_url(cli_args.single_url, cli_args.output_json, cli_args.debug)
+        return
+
     settings = get_settings()
     sheets = SheetsClient(settings)
     values = sheets.read_values()
     headers, rows, migrated = normalize_values(values)
-
-    if settings.max_rows and settings.max_rows > 0:
-        rows_to_process = rows[: settings.max_rows]
-    else:
-        rows_to_process = rows
+    rows_to_process = rows[: settings.max_rows] if settings.max_rows and settings.max_rows > 0 else rows
 
     parse_log: list[dict[str, Any]] = []
     for row in rows_to_process:
-        parse_log.append(
-            enrich_row(
-                row,
-                force_refresh=settings.force_refresh,
-                enable_playwright_fallback=settings.enable_playwright_fallback,
-                delay_seconds=settings.request_delay_seconds,
-            )
-        )
+        parse_log.append(enrich_row(row, settings.force_refresh, settings.enable_playwright_fallback, settings.request_delay_seconds))
 
-    serialized = serialize_rows(headers, rows)
-    sheets.write_values(serialized)
+    sheets.write_values(serialize_rows(headers, rows))
     sheets.apply_formatting()
 
-    html_path, pdf_path = generate_pdf(
-        rows,
-        output_dir=settings.output_dir,
-        include_only_checked=settings.include_only_checked,
-    )
+    html_path, pdf_path = generate_pdf(rows, output_dir=settings.output_dir, include_only_checked=settings.include_only_checked)
     drive_link = upload_pdf_to_drive(settings, pdf_path)
-
     summary = {
         "spreadsheet_id": settings.spreadsheet_id,
         "sheet_name": settings.sheet_name,

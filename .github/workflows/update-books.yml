@@ -6,7 +6,7 @@ on:
       force_refresh:
         description: "Принудительно обновить уже заполненные строки"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options: ["false", "true"]
       max_rows:
@@ -64,7 +64,7 @@ jobs:
           FORCE_REFRESH: ${{ inputs.force_refresh || 'false' }}
           MAX_ROWS: ${{ inputs.max_rows || '0' }}
           INCLUDE_ONLY_CHECKED: ${{ inputs.include_only_checked || 'false' }}
-          ENABLE_PLAYWRIGHT_FALLBACK: ${{ inputs.enable_playwright_fallback || 'false' }}
+          ENABLE_PLAYWRIGHT_FALLBACK: ${{ inputs.enable_playwright_fallback || 'true' }}
         run: |
           python -m books_catalog.main
 
@@ -76,4 +76,6 @@ jobs:
             output/books_catalog.pdf
             output/books_catalog.html
             output/run_summary.json
+            output/*.json
+            output/debug/**
           if-no-files-found: error
