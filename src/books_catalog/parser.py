@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import re
+import random
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -23,15 +23,15 @@ HEADERS = {
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-User": "?1",
+    "Sec-Fetch-Dest": "document",
 }
 
 def is_ozon_url(url: str) -> bool:
     return (urlparse(url).hostname or "").lower() in {"ozon.ru", "www.ozon.ru"}
 
 def resolve_to_full_url(url: str) -> str:
-    """Надёжно раскрываем короткую ссылку ozon.ru/t/..."""
     if not urlparse(url).path.startswith("/t/"):
         return url
     try:
@@ -41,21 +41,12 @@ def resolve_to_full_url(url: str) -> str:
         return url
 
 def call_composer_api(url: str) -> dict | None:
-    """Рабочий вызов composer-api.bx (2026)"""
     try:
-        payload = {
-            "url": url,
-            "pageType": "product",
-            "params": {}
-        }
+        payload = {"url": url, "pageType": "product", "params": {}}
         r = requests.post(
             "https://www.ozon.ru/api/composer-api.bx/page/json/v2",
             json=payload,
-            headers={
-                **HEADERS,
-                "Content-Type": "application/json",
-                "x-o3-app-name": "site",
-            },
+            headers={**HEADERS, "Content-Type": "application/json", "x-o3-app-name": "site"},
             timeout=20
         )
         if r.status_code == 200:
@@ -67,18 +58,14 @@ def call_composer_api(url: str) -> dict | None:
 def extract_from_composer(data: dict) -> dict:
     result: dict[str, Any] = {"images": []}
     widgets = data.get("widgetStates", {}) or {}
-
     for key, val in widgets.items():
         try:
             w = json.loads(val)
-            # Название + цена
             if any(x in key.lower() for x in ["websale", "product", "sale", "header"]):
                 info = w.get("cellTrackingInfo", {}).get("product", {}) or w.get("product", {}) or w
                 if isinstance(info, dict):
                     result["title"] = info.get("title") or info.get("name") or result.get("title")
                     result["price"] = info.get("price") or info.get("finalPrice") or info.get("currentPrice") or result.get("price")
-
-            # Изображения
             if any(x in key.lower() for x in ["gallery", "image", "photo", "media"]):
                 imgs = w.get("images", []) or w.get("gallery", [])
                 if isinstance(imgs, list):
@@ -89,16 +76,12 @@ def extract_from_composer(data: dict) -> dict:
                             src = item.get("url") or item.get("src") or item.get("original")
                             if src and isinstance(src, str) and src.startswith("http"):
                                 result["images"].append(src)
-
-            # Описание
-            if "description" in key.lower():
-                result["description"] = w.get("description") or w.get("text") or result.get("description")
         except:
             continue
     return result
 
 def fetch_with_playwright(url: str) -> dict:
-    """Максимальный stealth Playwright"""
+    """МАКСИМАЛЬНЫЙ stealth Playwright 2026"""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -108,53 +91,83 @@ def fetch_with_playwright(url: str) -> dict:
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
-                "--disable-dev-shm-usage"
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-plugins",
+                "--disable-background-networking",
             ]
         )
+
         context = browser.new_context(
             viewport={"width": 1440, "height": 1200},
             user_agent=HEADERS["User-Agent"],
             locale="ru-RU",
             timezone_id="Europe/Moscow",
+            bypass_csp=True,
+            ignore_https_errors=True,
         )
 
-        # Максимальный stealth
+        # === МАКСИМАЛЬНЫЙ STEALTH ===
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
             Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru']});
             Object.defineProperty(window, 'chrome', {get: () => ({runtime: {}})});
+            Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+            Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+
+            // Canvas + WebGL fingerprint protection
+            const originalGetContext = HTMLCanvasElement.prototype.getContext;
+            HTMLCanvasElement.prototype.getContext = function(type) {
+                if (type === '2d') {
+                    const ctx = originalGetContext.apply(this, arguments);
+                    const originalFillText = ctx.fillText;
+                    ctx.fillText = function(text, x, y) {
+                        arguments[0] = text + String(Math.random()).slice(2, 6);
+                        return originalFillText.apply(this, arguments);
+                    };
+                    return ctx;
+                }
+                return originalGetContext.apply(this, arguments);
+            };
         """)
 
         page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
         # Human-like поведение
-        page.wait_for_timeout(1800)
-        page.mouse.move(300, 400)
-        page.wait_for_timeout(600)
-        page.evaluate("window.scrollBy(0, 800)")
-        page.wait_for_timeout(900)
+        time.sleep(random.uniform(1.8, 3.2))
+        page.mouse.move(random.randint(200, 800), random.randint(200, 600))
+        time.sleep(0.7)
         page.evaluate("window.scrollBy(0, 700)")
-        page.wait_for_timeout(1200)
+        time.sleep(1.1)
+        page.evaluate("window.scrollBy(0, 900)")
+        time.sleep(1.4)
 
         data = page.evaluate("""() => ({
             title: document.querySelector('h1')?.innerText?.trim() || '',
             price: document.querySelector('[data-testid*="price"], .price, [class*="price"]')?.innerText?.trim() || '',
             images: Array.from(document.querySelectorAll('img')).map(i => i.src || i.currentSrc)
-                .filter(src => src && src.includes('ozon') && src.length > 50)
+                .filter(src => src && src.includes('ozon') && src.length > 50),
+            bodyText: document.body.innerText.substring(0, 2000)
         })""")
 
-        browser.close()
-        return data
+        html = page.content()
 
+        browser.close()
+
+        return {"title": data["title"], "price": data["price"], "images": data["images"], "html": html}
+
+# =============================================
+# Основная функция
+# =============================================
 
 def parse_ozon_product(url: str, enable_browser: bool = True, browser_mode: str = "always", debug_dir: str | None = None) -> ParsedBook:
     full_url = resolve_to_full_url(url)
     result = ParsedBook(url=full_url, source="Ozon")
     raw: dict[str, Any] = {"original_url": url, "full_url": full_url}
 
-    # 1. Composer API
+    # Composer API
     composer_data = call_composer_api(full_url)
     if composer_data:
         ext = extract_from_composer(composer_data)
@@ -164,7 +177,7 @@ def parse_ozon_product(url: str, enable_browser: bool = True, browser_mode: str 
         result.images = ext.get("images", [])[:3]
         raw["method"] = "composer_api"
 
-    # 2. Playwright (основной надёжный метод)
+    # Playwright (основной метод)
     if enable_browser and (browser_mode == "always" or (browser_mode == "fallback" and not result.title)):
         try:
             pw = fetch_with_playwright(full_url)
@@ -176,10 +189,10 @@ def parse_ozon_product(url: str, enable_browser: bool = True, browser_mode: str 
                 result.images.extend([i for i in pw.get("images", []) if i not in result.images][:2])
             raw["method"] = raw.get("method") or "playwright"
             raw["playwright_used"] = True
+            raw["body_text_sample"] = pw.get("bodyText", "")[:500]
         except Exception as e:
             raw["browser_error"] = str(e)
 
-    # Финализация
     result.images = list(dict.fromkeys([i for i in result.images if "ozon" in i.lower()]))[:2]
 
     if not result.title:
@@ -193,11 +206,13 @@ def parse_ozon_product(url: str, enable_browser: bool = True, browser_mode: str 
 
     result.raw = raw
 
-    # Debug (всегда сохраняем при наличии debug_dir)
+    # Debug
     if debug_dir:
         d = Path(debug_dir)
         d.mkdir(parents=True, exist_ok=True)
         (d / "ozon_debug.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        if "html" in pw:
+            (d / "ozon_page.html").write_text(pw["html"], encoding="utf-8")
 
     return result
 
@@ -205,11 +220,10 @@ def parse_ozon_product(url: str, enable_browser: bool = True, browser_mode: str 
 def parse_book(
     url: str,
     enable_playwright_fallback: bool = True,
-    delay_seconds: float = 1.5,
+    delay_seconds: float = 1.8,
     ozon_browser_mode: str = "always",
     debug_dir: str | None = None,
 ) -> ParsedBook:
-    
     if delay_seconds > 0:
         time.sleep(delay_seconds)
 
