@@ -5,9 +5,10 @@ import ipaddress
 import re
 from dataclasses import asdict
 from html import unescape
+from pathlib import Path
 from time import sleep
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -20,31 +21,38 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
 
-PRICE_RE = re.compile(r"(?:(?:Цена|price|стоимость)[^0-9]{0,20})?([0-9][0-9\s]{1,8})(?:\s?₽|\s?руб|\s?р\.)", re.IGNORECASE)
+OZON_ANTIBOT_MARKERS = [
+    "доступ ограничен",
+    "проверка безопасности",
+    "подтвердите, что вы не робот",
+    "captcha",
+    "access denied",
+    "forbidden",
+    "unusual traffic",
+    "bot",
+]
 WHITESPACE_RE = re.compile(r"\s+")
+PRICE_NUM_RE = re.compile(r"(\d[\d\s\u00A0\u2009\u202F]{0,15})(?:\s*(?:₽|руб\.?|р\.))", re.IGNORECASE)
 
 
 def is_safe_url(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
+    parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return False
     host = (parsed.hostname or "").strip().lower()
-    if not host:
-        return False
-    if host in {"localhost", "127.0.0.1", "::1"}:
+    if not host or host in {"localhost", "127.0.0.1", "::1"}:
         return False
     try:
         ip = ipaddress.ip_address(host)
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             return False
     except ValueError:
-        # not an IP literal
         pass
     return True
 
@@ -52,242 +60,197 @@ def is_safe_url(url: str) -> bool:
 def clean_text(value: Any, max_len: int | None = None) -> str:
     if value is None:
         return ""
-    if isinstance(value, list):
-        value = ", ".join(clean_text(v) for v in value if v)
-    text = unescape(str(value))
+    text = unescape(str(value)).replace("\u00a0", " ").replace("\u2009", " ").replace("\u202f", " ")
     text = WHITESPACE_RE.sub(" ", text).strip()
     if max_len and len(text) > max_len:
-        text = text[: max_len - 1].rstrip() + "…"
+        return text[: max_len - 1].rstrip() + "…"
     return text
 
 
 def normalize_price(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (int, float)):
-        return f"{int(value):,}".replace(",", " ") + " ₽"
     text = clean_text(value)
-    match = PRICE_RE.search(text)
-    if match:
-        digits = re.sub(r"\D", "", match.group(1))
-        if digits:
-            return f"{int(digits):,}".replace(",", " ") + " ₽"
-    # JSON-LD often returns pure numeric strings.
-    digits_only = re.sub(r"\D", "", text)
-    if digits_only and 2 <= len(digits_only) <= 7:
-        return f"{int(digits_only):,}".replace(",", " ") + " ₽"
-    return text[:60]
-
-
-def source_name(url: str) -> str:
-    host = urlparse(url).netloc.replace("www.", "").lower()
-    if "ozon" in host:
-        return "Ozon"
-    if "labirint" in host:
-        return "Лабиринт"
-    if "book24" in host:
-        return "Book24"
-    if "chitai-gorod" in host:
-        return "Читай-город"
-    if "alpinabook" in host:
-        return "Альпина"
-    return host or "Источник"
-
-
-def iter_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
-    objects: list[dict[str, Any]] = []
-    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        raw = tag.string or tag.get_text() or ""
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        stack = parsed if isinstance(parsed, list) else [parsed]
-        while stack:
-            obj = stack.pop(0)
-            if isinstance(obj, dict):
-                objects.append(obj)
-                graph = obj.get("@graph")
-                if isinstance(graph, list):
-                    stack.extend(graph)
-            elif isinstance(obj, list):
-                stack.extend(obj)
-    return objects
-
-
-def find_best_structured_object(objects: list[dict[str, Any]]) -> dict[str, Any] | None:
-    preferred_types = {"book", "product", "creativework"}
-    for obj in objects:
-        obj_type = obj.get("@type", "")
-        if isinstance(obj_type, list):
-            type_values = {str(x).lower() for x in obj_type}
-        else:
-            type_values = {str(obj_type).lower()}
-        if type_values & preferred_types:
-            return obj
-    for obj in objects:
-        if obj.get("name") and (obj.get("image") or obj.get("description") or obj.get("offers")):
-            return obj
-    return None
-
-
-def extract_author(value: Any) -> str:
-    if not value:
+    if not text:
         return ""
-    if isinstance(value, str):
-        return clean_text(value)
-    if isinstance(value, list):
-        return ", ".join(filter(None, [extract_author(v) for v in value]))
-    if isinstance(value, dict):
-        return clean_text(value.get("name"))
-    return clean_text(value)
-
-
-def extract_images(value: Any, base_url: str) -> list[str]:
-    images: list[str] = []
-
-    def add(candidate: Any) -> None:
-        if not candidate:
-            return
-        if isinstance(candidate, dict):
-            candidate = candidate.get("url") or candidate.get("contentUrl")
-        if isinstance(candidate, list):
-            for item in candidate:
-                add(item)
-            return
-        text = str(candidate).strip()
-        if not text or text.startswith("data:"):
-            return
-        if text.startswith("//"):
-            text = "https:" + text
-        elif text.startswith("/"):
-            text = urljoin(base_url, text)
-        if text.startswith("http") and text not in images:
-            images.append(text)
-
-    add(value)
-    return images
-
-
-def extract_og(soup: BeautifulSoup, prop: str) -> str:
-    tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
-    if tag and tag.get("content"):
-        return clean_text(tag.get("content"))
+    m = PRICE_NUM_RE.search(text)
+    candidate = m.group(1) if m else text
+    digits = re.sub(r"\D", "", candidate)
+    if digits:
+        return f"{int(digits):,}".replace(",", " ") + " ₽"
     return ""
 
 
-def parse_from_soup(url: str, soup: BeautifulSoup) -> ParsedBook:
-    result = ParsedBook(url=url, source=source_name(url))
-    structured = find_best_structured_object(iter_json_ld(soup))
+def is_ozon_url(url: str) -> bool:
+    return (urlparse(url).hostname or "").lower() in {"ozon.ru", "www.ozon.ru"}
 
-    if structured:
-        offers = structured.get("offers") or {}
-        if isinstance(offers, list) and offers:
-            offers = offers[0]
-        if not isinstance(offers, dict):
-            offers = {}
-        result.title = clean_text(structured.get("name"), 160)
-        result.author = extract_author(structured.get("author") or structured.get("creator"))
-        result.description = clean_text(structured.get("description"), 550)
-        result.price = normalize_price(offers.get("price") or offers.get("lowPrice") or offers.get("highPrice"))
-        availability = clean_text(offers.get("availability") or structured.get("availability"))
-        if availability:
-            result.availability = "есть" if "instock" in availability.lower() or "in stock" in availability.lower() else availability
-        result.images.extend(extract_images(structured.get("image"), url))
 
-    # OpenGraph fallback.
-    if not result.title:
-        result.title = clean_text(extract_og(soup, "og:title") or (soup.title.string if soup.title else ""), 160)
-    if not result.description:
-        result.description = clean_text(extract_og(soup, "og:description") or extract_og(soup, "description"), 550)
-    og_image = extract_og(soup, "og:image")
-    result.images.extend([img for img in extract_images(og_image, url) if img not in result.images])
+def extract_product_id_from_ozon_url(url: str) -> str:
+    m = re.search(r"-(\d{6,})", urlparse(url).path)
+    return m.group(1) if m else ""
 
-    # Meta itemprop fallback.
-    if not result.price:
-        price_tag = soup.find(attrs={"itemprop": "price"}) or soup.find("meta", attrs={"property": "product:price:amount"})
-        if price_tag:
-            result.price = normalize_price(price_tag.get("content") or price_tag.get_text())
-    if not result.price:
-        body_text = clean_text(soup.get_text(" "), 5000)
-        match = PRICE_RE.search(body_text)
-        if match:
-            result.price = normalize_price(match.group(0))
 
-    if not result.images:
-        for img in soup.find_all("img"):
-            src = img.get("src") or img.get("data-src") or img.get("data-original")
-            alt = clean_text(img.get("alt"))
-            src_text = str(src or "")
-            if not src_text:
-                continue
-            score = 0
-            if any(token in src_text.lower() for token in ["cover", "product", "book", "item", "img"]):
-                score += 1
-            if any(token in alt.lower() for token in ["книга", "book", "облож", "cover"]):
-                score += 1
-            if score > 0:
-                result.images.extend([img_url for img_url in extract_images(src_text, url) if img_url not in result.images])
-            if len(result.images) >= 2:
-                break
+def normalize_ozon_url(url: str) -> str:
+    p = urlparse(url)
+    return urlunparse((p.scheme or "https", p.netloc, p.path, "", "", ""))
 
-    if not result.title:
-        result.status = "NEEDS_REVIEW"
-        result.error = "Не удалось определить название. Возможно, сайт отдал динамическую страницу или капчу."
-    result.images = result.images[:2]
-    result.raw = {"structured": structured or {}, "og_title": extract_og(soup, "og:title")}
-    return result
+
+def cleanup_ozon_title(text: str) -> str:
+    t = clean_text(text)
+    t = re.sub(r"\s*купить\s+на\s+ozon.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*[-|]\s*ozon.*$", "", t, flags=re.IGNORECASE)
+    return clean_text(t)
+
+
+def detect_ozon_antibot(text: str) -> bool:
+    low = clean_text(text).lower()
+    return any(marker in low for marker in OZON_ANTIBOT_MARKERS)
+
+
+def extract_best_from_srcset(srcset: str) -> str:
+    parts = [p.strip() for p in srcset.split(",") if p.strip()]
+    if not parts:
+        return ""
+    best = parts[-1].split()[0]
+    return best
+
+
+def filter_image(url: str) -> bool:
+    low = url.lower()
+    bad = ["logo", "icon", "avatar", "sprite", "pixel", "payment", "delivery"]
+    return not any(x in low for x in bad)
 
 
 def fetch_static(url: str, timeout: int = 25) -> str:
-    if not is_safe_url(url):
-        raise ValueError("Unsafe URL: only public http(s) addresses are allowed")
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
-    response.raise_for_status()
-    return response.text
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    for i in range(3):
+        r = s.get(url, timeout=timeout, allow_redirects=True)
+        if r.status_code < 500:
+            r.raise_for_status()
+            return r.text
+        sleep(1 + i)
+    r.raise_for_status()
+    return ""
 
 
-def fetch_rendered(url: str, timeout_ms: int = 35000) -> str:
-    if not is_safe_url(url):
-        raise ValueError("Unsafe URL: only public http(s) addresses are allowed")
+def fetch_rendered_ozon(url: str, timeout_ms: int = 35000) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=HEADERS["User-Agent"], locale="ru-RU")
+        page = browser.new_page(
+            user_agent=HEADERS["User-Agent"],
+            locale="ru-RU",
+            viewport={"width": 1440, "height": 2200},
+            timezone_id="Europe/Moscow",
+        )
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         try:
-            page.wait_for_load_state("networkidle", timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
             pass
-        html = page.content()
+        page.wait_for_timeout(2500)
+        data = page.evaluate(
+            """() => ({
+              title: document.title,
+              h1: document.querySelector('h1')?.innerText || '',
+              bodyText: document.body?.innerText || '',
+              widgets: Array.from(document.querySelectorAll('[data-widget]')).map(n=>({w:n.getAttribute('data-widget'),t:n.innerText?.slice(0,1200)||''})),
+              meta: Object.fromEntries(Array.from(document.querySelectorAll('meta[property],meta[name]')).map(m=>[(m.getAttribute('property')||m.getAttribute('name')||''), m.getAttribute('content')||''])),
+              images: Array.from(document.querySelectorAll('img')).map(i=>({src:i.getAttribute('src')||'',currentSrc:i.currentSrc||'',srcset:i.getAttribute('srcset')||'',alt:i.getAttribute('alt')||''}))
+            })"""
+        )
+        data["html"] = page.content()
         browser.close()
-        return html
+        return data
 
 
-def parse_book(url: str, enable_playwright_fallback: bool = False, delay_seconds: float = 0.0) -> ParsedBook:
+def parse_ozon_product(url: str, enable_browser: bool = True, debug_dir: str | None = None) -> ParsedBook:
+    source_url = url
+    canonical_url = normalize_ozon_url(url)
+    result = ParsedBook(url=canonical_url, source="Ozon")
+    raw: dict[str, Any] = {"source_url": source_url, "canonical_url": canonical_url, "product_id": extract_product_id_from_ozon_url(url)}
+    html = ""
+    try:
+        html = fetch_static(canonical_url)
+    except Exception as exc:
+        raw["static_error"] = f"{type(exc).__name__}: {exc}"
+    soup = BeautifulSoup(html, "lxml") if html else BeautifulSoup("", "lxml")
+    og_title = clean_text((soup.find("meta", property="og:title") or {}).get("content", ""))
+    og_desc = clean_text((soup.find("meta", property="og:description") or {}).get("content", ""), 700)
+    og_img = clean_text((soup.find("meta", property="og:image") or {}).get("content", ""))
+    price_meta = clean_text((soup.find("meta", property="product:price:amount") or {}).get("content", ""))
+
+    result.title = cleanup_ozon_title(og_title)
+    result.description = og_desc
+    result.price = normalize_price(price_meta)
+    if og_img and filter_image(og_img):
+        result.images.append(og_img)
+
+    page_data = {}
+    if enable_browser:
+        try:
+            page_data = fetch_rendered_ozon(canonical_url)
+        except Exception as exc:
+            raw["browser_error"] = f"{type(exc).__name__}: {exc}"
+    if page_data:
+        body_text = page_data.get("bodyText", "")
+        if detect_ozon_antibot(body_text):
+            result.status = "Ozon anti-bot"
+            result.error = "Ozon вернул страницу проверки/антибот, данные не извлечены"
+        if not result.title:
+            result.title = cleanup_ozon_title(page_data.get("h1") or page_data.get("meta", {}).get("og:title") or page_data.get("title", ""))
+        if not result.description:
+            result.description = clean_text(page_data.get("meta", {}).get("og:description", ""), 700)
+        if not result.price:
+            result.price = normalize_price(" ".join([w.get("t", "") for w in page_data.get("widgets", []) if "price" in w.get("w", "").lower()]))
+        for img in page_data.get("images", []):
+            candidate = img.get("currentSrc") or extract_best_from_srcset(img.get("srcset", "")) or img.get("src")
+            if candidate.startswith("//"):
+                candidate = "https:" + candidate
+            if candidate.startswith("/"):
+                candidate = urljoin(canonical_url, candidate)
+            if candidate.startswith("http") and filter_image(candidate) and candidate not in result.images:
+                result.images.append(candidate)
+    if debug_dir:
+        d = Path(debug_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        if html:
+            (d / "ozon_static.html").write_text(html, encoding="utf-8")
+        if page_data.get("html"):
+            (d / "ozon_rendered.html").write_text(page_data["html"], encoding="utf-8")
+        (d / "ozon_debug.json").write_text(json.dumps(page_data or raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    result.images = [i for i in result.images if i.startswith("http")][:2]
+    missing = [k for k, v in {"title": result.title, "price": result.price, "description": result.description, "images": result.images}.items() if not v]
+    if result.status != "Ozon anti-bot":
+        if missing:
+            result.status = "Частично"
+            result.error = f"Не хватает полей: {', '.join(missing)}"
+        else:
+            result.status = "OK"
+    result.raw = raw
+    return result
+
+
+def parse_book(url: str, enable_playwright_fallback: bool = False, delay_seconds: float = 0.0, debug_dir: str | None = None) -> ParsedBook:
     if delay_seconds > 0:
         sleep(delay_seconds)
-    result = ParsedBook(url=url, source=source_name(url))
+    if is_ozon_url(url):
+        return parse_ozon_product(url, enable_browser=True, debug_dir=debug_dir)
+    result = ParsedBook(url=url, source=urlparse(url).netloc)
     try:
         html = fetch_static(url)
         soup = BeautifulSoup(html, "lxml")
-        parsed = parse_from_soup(url, soup)
-        if parsed.status == "NEEDS_REVIEW" and enable_playwright_fallback:
-            rendered = fetch_rendered(url)
-            parsed = parse_from_soup(url, BeautifulSoup(rendered, "lxml"))
-        return parsed
-    except Exception as exc:  # noqa: BLE001
+        result.title = clean_text((soup.title.string if soup.title else ""), 160)
+        result.description = clean_text(soup.get_text(" "), 550)
+        result.status = "OK" if result.title else "NEEDS_REVIEW"
+    except Exception as exc:
         result.status = "ERROR"
         result.error = f"{type(exc).__name__}: {exc}"
-        return result
+    return result
 
 
 def parsed_to_debug_dict(parsed: ParsedBook) -> dict[str, Any]:
     data = asdict(parsed)
-    if len(str(data.get("raw", ""))) > 1000:
+    if len(str(data.get("raw", ""))) > 2500:
         data["raw"] = "<trimmed>"
     return data
