@@ -22,6 +22,7 @@ class Settings:
     include_only_checked: bool
     enable_playwright_fallback: bool
     request_delay_seconds: float
+    ozon_browser_mode: str
     service_account_info: dict[str, Any] | None
     service_account_file: str | None
 
@@ -64,6 +65,9 @@ def get_settings() -> Settings:
         raise RuntimeError("SPREADSHEET_ID is required.")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    ozon_browser_mode = (os.getenv("OZON_BROWSER_MODE", "fallback") or "fallback").strip().lower()
+    if ozon_browser_mode not in {"never", "fallback", "always"}:
+        raise RuntimeError("OZON_BROWSER_MODE must be one of: never, fallback, always")
     return Settings(
         spreadsheet_id=spreadsheet_id,
         sheet_name=args.sheet_name,
@@ -74,6 +78,7 @@ def get_settings() -> Settings:
         include_only_checked=args.include_only_checked,
         enable_playwright_fallback=args.enable_playwright_fallback,
         request_delay_seconds=args.request_delay_seconds,
+        ozon_browser_mode=ozon_browser_mode,
         service_account_info=load_service_account_info(),
         service_account_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or None,
     )

@@ -30,12 +30,23 @@ def should_parse(row: BookRow, force_refresh: bool) -> bool:
     return not (row.title and row.status in {"OK", "SKIPPED"})
 
 
-def enrich_row(row: BookRow, force_refresh: bool, enable_playwright_fallback: bool, delay_seconds: float) -> dict[str, Any]:
+def enrich_row(
+    row: BookRow,
+    force_refresh: bool,
+    enable_playwright_fallback: bool,
+    delay_seconds: float,
+    ozon_browser_mode: str,
+) -> dict[str, Any]:
     if not should_parse(row, force_refresh=force_refresh):
         row.set_value("Статус парсинга", row.status or "SKIPPED")
         return {"row": row.row_number, "url": row.url, "status": "SKIPPED"}
 
-    parsed = parse_book(row.url, enable_playwright_fallback=enable_playwright_fallback, delay_seconds=delay_seconds)
+    parsed = parse_book(
+        row.url,
+        enable_playwright_fallback=enable_playwright_fallback,
+        delay_seconds=delay_seconds,
+        ozon_browser_mode=ozon_browser_mode,
+    )
     row.setdefault_nonempty("Источник", parsed.source, force=force_refresh)
     row.setdefault_nonempty("Название", parsed.title, force=force_refresh)
     row.setdefault_nonempty("Цена", parsed.price, force=force_refresh)
@@ -85,7 +96,15 @@ def main() -> None:
 
     parse_log: list[dict[str, Any]] = []
     for row in rows_to_process:
-        parse_log.append(enrich_row(row, settings.force_refresh, settings.enable_playwright_fallback, settings.request_delay_seconds))
+        parse_log.append(
+            enrich_row(
+                row,
+                settings.force_refresh,
+                settings.enable_playwright_fallback,
+                settings.request_delay_seconds,
+                settings.ozon_browser_mode,
+            )
+        )
 
     sheets.write_values(serialize_rows(headers, rows))
     sheets.apply_formatting()

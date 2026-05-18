@@ -77,6 +77,10 @@ GitHub → `Actions` → `Update books catalog` → `Run workflow`.
 - `force_refresh`: принудительно обновлять уже заполненные строки.
 - `max_rows`: ограничение количества строк для теста, например `10`.
 - `include_only_checked`: делать PDF только по строкам, где `Включить в PDF = TRUE`.
+- `OZON_BROWSER_MODE` (env): режим браузерного парсинга Ozon:
+  - `never` — не запускать Chromium для Ozon;
+  - `fallback` — запускать Chromium только если статический HTML не дал ключевые поля;
+  - `always` — всегда запускать Chromium (удобно для локальной диагностики).
 
 ### 5. Опционально: кнопка в Google Sheets через Apps Script
 
@@ -152,6 +156,19 @@ ARTSTUDIO Books → Запустить обновление
 - Поэтому в таблице есть статус `NEEDS_REVIEW`: строка остается в работе, но требует ручной проверки.
 - PDF строится только по строкам с валидной ссылкой и заполненным названием либо статусом `OK`.
 
+## Ozon: надежный режим парсинга (2026)
+
+Реализована многоступенчатая схема:
+
+1. Нормализация и резолв коротких ссылок `https://ozon.ru/t/...` до канонической карточки.
+2. Статический HTML-парсинг (`og:*`, `product:*` meta).
+3. Извлечение структурированных данных из `__NEXT_DATA__` (цена, старая цена, бренд, продавец, рейтинг, отзывы, SKU/ID, breadcrumbs, доступность, галерея).
+4. Browser fallback (Chromium/Playwright) согласно `ENABLE_PLAYWRIGHT_FALLBACK` + `OZON_BROWSER_MODE`.
+
+Дополнительно:
+- Полный набор извлеченных диагностических полей сохраняется в `parsed.raw` и в `output/run_summary.json`.
+- Для проблемных карточек выставляется `Частично`/`Ozon anti-bot` с причиной в `Комментарий`.
+
 ## Локальный запуск
 
 1. Создайте `.env` по примеру `.env.example`.
@@ -169,6 +186,12 @@ python -m playwright install chromium
 
 ```bash
 python -m books_catalog.main --force-refresh --max-rows 10
+```
+
+Для локальной диагностики Ozon через Chromium:
+
+```bash
+ENABLE_PLAYWRIGHT_FALLBACK=true OZON_BROWSER_MODE=always python -m books_catalog.main --force-refresh --max-rows 3
 ```
 
 На Windows можно использовать:
