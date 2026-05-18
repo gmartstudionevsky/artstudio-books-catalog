@@ -1,0 +1,79 @@
+name: Update books catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: "Принудительно обновить уже заполненные строки"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      max_rows:
+        description: "Ограничить количество строк для теста; 0 = все"
+        required: false
+        default: "0"
+      include_only_checked:
+        description: "PDF только по строкам с Включить в PDF = TRUE"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      enable_playwright_fallback:
+        description: "Использовать браузерный fallback для сложных страниц"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+  schedule:
+    # Every Monday at 07:30 UTC. Disable/remove if manual runs are enough.
+    - cron: "30 7 * * 1"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  update-catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+          python -m playwright install --with-deps chromium
+
+      - name: Run catalog update
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_NAME: ${{ vars.SHEET_NAME || 'Лист1' }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          FORCE_REFRESH: ${{ inputs.force_refresh || 'false' }}
+          MAX_ROWS: ${{ inputs.max_rows || '0' }}
+          INCLUDE_ONLY_CHECKED: ${{ inputs.include_only_checked || 'false' }}
+          ENABLE_PLAYWRIGHT_FALLBACK: ${{ inputs.enable_playwright_fallback || 'false' }}
+        run: |
+          python -m books_catalog.main
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artstudio-books-catalog
+          path: |
+            output/books_catalog.pdf
+            output/books_catalog.html
+            output/run_summary.json
+          if-no-files-found: error
