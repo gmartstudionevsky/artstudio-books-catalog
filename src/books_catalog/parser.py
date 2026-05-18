@@ -164,7 +164,12 @@ def fetch_rendered_ozon(url: str, timeout_ms: int = 35000) -> dict[str, Any]:
         return data
 
 
-def parse_ozon_product(url: str, enable_browser: bool = True, debug_dir: str | None = None) -> ParsedBook:
+def parse_ozon_product(
+    url: str,
+    enable_browser: bool = True,
+    browser_mode: str = "fallback",
+    debug_dir: str | None = None,
+) -> ParsedBook:
     source_url = url
     canonical_url = normalize_ozon_url(url)
     result = ParsedBook(url=canonical_url, source="Ozon")
@@ -187,7 +192,9 @@ def parse_ozon_product(url: str, enable_browser: bool = True, debug_dir: str | N
         result.images.append(og_img)
 
     page_data = {}
-    if enable_browser:
+    needs_browser_fetch = not (result.title and result.price and result.description and result.images)
+    should_fetch_browser = enable_browser and (browser_mode == "always" or (browser_mode == "fallback" and needs_browser_fetch))
+    if should_fetch_browser:
         try:
             page_data = fetch_rendered_ozon(canonical_url)
         except Exception as exc:
@@ -231,11 +238,22 @@ def parse_ozon_product(url: str, enable_browser: bool = True, debug_dir: str | N
     return result
 
 
-def parse_book(url: str, enable_playwright_fallback: bool = False, delay_seconds: float = 0.0, debug_dir: str | None = None) -> ParsedBook:
+def parse_book(
+    url: str,
+    enable_playwright_fallback: bool = False,
+    delay_seconds: float = 0.0,
+    ozon_browser_mode: str = "fallback",
+    debug_dir: str | None = None,
+) -> ParsedBook:
     if delay_seconds > 0:
         sleep(delay_seconds)
     if is_ozon_url(url):
-        return parse_ozon_product(url, enable_browser=True, debug_dir=debug_dir)
+        return parse_ozon_product(
+            url,
+            enable_browser=enable_playwright_fallback,
+            browser_mode=ozon_browser_mode,
+            debug_dir=debug_dir,
+        )
     result = ParsedBook(url=url, source=urlparse(url).netloc)
     try:
         html = fetch_static(url)

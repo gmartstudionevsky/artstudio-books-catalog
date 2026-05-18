@@ -77,6 +77,10 @@ GitHub → `Actions` → `Update books catalog` → `Run workflow`.
 - `force_refresh`: принудительно обновлять уже заполненные строки.
 - `max_rows`: ограничение количества строк для теста, например `10`.
 - `include_only_checked`: делать PDF только по строкам, где `Включить в PDF = TRUE`.
+- `OZON_BROWSER_MODE` (env): режим браузерного парсинга Ozon:
+  - `never` — не запускать Chromium для Ozon;
+  - `fallback` — запускать Chromium только если статический HTML не дал ключевые поля;
+  - `always` — всегда запускать Chromium (удобно для локальной диагностики).
 
 ### 5. Опционально: кнопка в Google Sheets через Apps Script
 
@@ -169,6 +173,12 @@ python -m playwright install chromium
 
 ```bash
 python -m books_catalog.main --force-refresh --max-rows 10
+```
+
+Для локальной диагностики Ozon через Chromium:
+
+```bash
+ENABLE_PLAYWRIGHT_FALLBACK=true OZON_BROWSER_MODE=always python -m books_catalog.main --force-refresh --max-rows 3
 ```
 
 На Windows можно использовать:

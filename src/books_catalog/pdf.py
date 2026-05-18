@@ -134,7 +134,15 @@ def html_to_pdf(html_path: Path, output_pdf: Path) -> None:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(locale="ru-RU")
-        page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+        # NOTE:
+        # For local file:// HTML `networkidle` can hang/timeout when the page
+        # references remote assets (e.g. image URLs that keep retrying or stay pending).
+        # We only need the DOM and styles applied for PDF generation.
+        page.goto(html_path.resolve().as_uri(), wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.wait_for_load_state("load", timeout=10000)
+        except Exception:
+            pass
         page.emulate_media(media="screen")
         page.pdf(
             path=str(output_pdf),
