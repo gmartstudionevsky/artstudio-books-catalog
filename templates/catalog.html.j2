@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>ARTSTUDIO Books Catalog</title>
+  <style>
+    {% include "style.css" %}
+  </style>
+</head>
+<body>
+  <section class="cover page">
+    <div class="brandline">ARTSTUDIO Nevsky · lounge selection</div>
+    <h1>Подборка книг<br>для лаунж-зоны</h1>
+    <p class="subtitle">Автоматически собранный каталог для отбора, закупки и визуальной оценки книг.</p>
+    <div class="cover-grid">
+      <div><span>{{ total_count }}</span><small>книг в PDF</small></div>
+      <div><span>{{ topic_count }}</span><small>тематик</small></div>
+      <div><span>{{ high_priority_count }}</span><small>высокий приоритет</small></div>
+      <div><span>{{ total_budget }}</span><small>ориентировочный бюджет</small></div>
+    </div>
+  </section>
+
+  <section class="summary page">
+    <h2>Сводка отбора</h2>
+    <p>Каталог сгруппирован по тематикам. Каждая карточка содержит базовую информацию, изображение, цену, краткое описание и кликабельную ссылку на источник.</p>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Тематика</th>
+          <th>Кол-во</th>
+          <th>Книги высокого приоритета</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for topic, items in grouped.items() %}
+        <tr>
+          <td>{{ topic }}</td>
+          <td>{{ items|length }}</td>
+          <td>{{ items|selectattr("priority", "equalto", "высокий")|list|length }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% for topic, items in grouped.items() %}
+  <section class="topic page">
+    <div class="topic-header">
+      <span>Тематика</span>
+      <h2>{{ topic }}</h2>
+    </div>
+    <div class="cards">
+    {% for book in items %}
+      <article class="card">
+        <div class="images">
+          {% if book.image1 %}<img src="{{ book.image1 }}" alt="{{ book.title }}">{% else %}<div class="image-placeholder">Нет изображения</div>{% endif %}
+          {% if book.image2 %}<img src="{{ book.image2 }}" alt="{{ book.title }}">{% endif %}
+        </div>
+        <div class="content">
+          <div class="meta-row">
+            <span class="source">{{ book.source }}</span>
+            {% if book.priority %}<span class="priority priority-{{ book.priority|replace(' ', '-') }}">{{ book.priority }}</span>{% endif %}
+          </div>
+          <h3>{{ book.title }}</h3>
+          {% if book.author %}<p class="author">{{ book.author }}</p>{% endif %}
+          <p class="description">{{ book.description }}</p>
+          <div class="facts">
+            {% if book.price %}<div><b>{{ book.price }}</b><small>цена</small></div>{% endif %}
+            {% if book.place %}<div><b>{{ book.place }}</b><small>место</small></div>{% endif %}
+            {% if book.visual_value %}<div><b>{{ book.visual_value }}/5</b><small>визуальная ценность</small></div>{% endif %}
+            {% if book.artstudio_fit %}<div><b>{{ book.artstudio_fit }}/5</b><small>контекст ARTSTUDIO</small></div>{% endif %}
+          </div>
+          {% if book.comment %}<p class="comment">{{ book.comment }}</p>{% endif %}
+          <a class="link" href="{{ book.url }}">Открыть карточку</a>
+        </div>
+      </article>
+    {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</body>
+</html>

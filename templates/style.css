@@ -1,0 +1,264 @@
+:root {
+  --carbon: #262D36;
+  --meteorite: #212121;
+  --gold: #C49A5F;
+  --egret: #FFF6E5;
+  --muted: #6E737A;
+  --line: #E6E1D8;
+  --paper: #FFFCF7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--meteorite);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.page {
+  page-break-after: always;
+  padding: 0;
+}
+
+.cover {
+  min-height: 268mm;
+  background: linear-gradient(135deg, var(--carbon) 0%, #1b1f25 100%);
+  color: white;
+  padding: 34mm 20mm 18mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.brandline {
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 9px;
+}
+
+h1 {
+  font-size: 54px;
+  line-height: 0.95;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  margin: 22mm 0 7mm;
+}
+
+.subtitle {
+  max-width: 118mm;
+  font-size: 15px;
+  color: #E8E0D4;
+}
+
+.cover-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4mm;
+  border-top: 1px solid rgba(196,154,95,0.5);
+  padding-top: 8mm;
+}
+
+.cover-grid div {
+  border-left: 1px solid rgba(196,154,95,0.35);
+  padding-left: 4mm;
+}
+
+.cover-grid span {
+  display: block;
+  color: var(--gold);
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.cover-grid small {
+  display: block;
+  margin-top: 2mm;
+  color: #E8E0D4;
+}
+
+.summary,
+.topic {
+  padding: 12mm 4mm 0;
+}
+
+h2 {
+  font-size: 25px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  margin: 0 0 6mm;
+  color: var(--carbon);
+}
+
+.summary p {
+  width: 148mm;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0 0 7mm;
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.summary-table th,
+.summary-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 4mm 3mm;
+  text-align: left;
+}
+
+.summary-table th {
+  background: var(--carbon);
+  color: white;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.topic-header {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 7mm;
+  padding-bottom: 4mm;
+}
+
+.topic-header span {
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 8px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5mm;
+}
+
+.card {
+  min-height: 74mm;
+  display: grid;
+  grid-template-columns: 48mm 1fr;
+  gap: 6mm;
+  padding: 5mm;
+  background: white;
+  border: 1px solid var(--line);
+  page-break-inside: avoid;
+}
+
+.images {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2mm;
+  align-content: start;
+}
+
+.images img,
+.image-placeholder {
+  width: 100%;
+  height: 62mm;
+  object-fit: contain;
+  background: #F5F1EA;
+  border: 1px solid #EEE8DE;
+}
+
+.images img:only-child {
+  grid-column: span 2;
+}
+
+.image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 4mm;
+  margin-bottom: 2mm;
+}
+
+.source,
+.priority {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 8px;
+  color: var(--gold);
+}
+
+.priority {
+  color: var(--carbon);
+  border: 1px solid var(--line);
+  padding: 1mm 2mm;
+}
+
+.card h3 {
+  font-size: 17px;
+  line-height: 1.1;
+  margin: 0 0 1.5mm;
+  color: var(--carbon);
+  font-weight: 400;
+}
+
+.author {
+  margin: 0 0 2mm;
+  color: var(--muted);
+}
+
+.description {
+  margin: 0 0 3mm;
+  color: #34383D;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2mm;
+  margin: 3mm 0;
+}
+
+.facts div {
+  background: #FAF7F1;
+  border: 1px solid var(--line);
+  padding: 2mm;
+  min-height: 13mm;
+}
+
+.facts b {
+  display: block;
+  font-size: 10px;
+  color: var(--carbon);
+}
+
+.facts small {
+  display: block;
+  color: var(--muted);
+  font-size: 7.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.comment {
+  border-left: 2px solid var(--gold);
+  padding-left: 3mm;
+  color: var(--muted);
+  margin: 3mm 0;
+}
+
+.link {
+  display: inline-block;
+  margin-top: 2mm;
+  color: var(--carbon);
+  text-decoration: none;
+  border-bottom: 1px solid var(--gold);
+  padding-bottom: 0.5mm;
+}
